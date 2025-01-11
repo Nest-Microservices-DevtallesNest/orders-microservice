@@ -10,8 +10,9 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { PrismaClient } from '@prisma/client';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { ChangeOrderStatusDto } from './dto/change-order-status.dto';
-import { firstValueFrom } from 'rxjs';
 import { NATS_SERVICE } from 'src/config';
+import { OrderWithProducts } from './interfaces/order-with-products.interface';
+import { firstValueFrom } from 'rxjs';
 
 @Injectable()
 export class OrdersService extends PrismaClient implements OnModuleInit {
@@ -40,10 +41,9 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
         return price * orderItem.quantity;
       }, 0);
 
-      const totalItems = createOrderDto.items.reduce(
-        (acc, orderItem) => acc + orderItem.quantity,
-        0,
-      );
+      const totalItems = createOrderDto.items.reduce((acc, orderItem) => {
+        return acc + orderItem.quantity;
+      }, 0);
 
       const order = await this.order.create({
         data: {
@@ -55,8 +55,8 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
                 price: products.find(
                   (product) => product.id === orderItem.productId,
                 ).price,
+                productId: orderItem.productId,
                 quantity: orderItem.quantity,
-                productId: orderItem.quantity,
               })),
             },
           },
@@ -72,11 +72,15 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
         },
       });
 
+      console.log(products);
+      console.log(...order.OrderItem);
+
       return {
         ...order,
         OrderItem: order.OrderItem.map((orderItem) => ({
           ...orderItem,
-          name: products.find((product) => product),
+          name: products.find((product) => product.id === orderItem.productId)
+            .name,
         })),
       };
     } catch (error) {
@@ -152,7 +156,6 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
   }
 
   async changeOrderStatus(changeOrderStatusDto: ChangeOrderStatusDto) {
-    console.log(changeOrderStatusDto);
     const { id, status } = changeOrderStatusDto;
 
     const order = await this.findOne(id);
@@ -169,5 +172,30 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
         status,
       },
     });
+  }
+
+  async createPaymentSession(order: OrderWithProducts) {
+    console.log({ order });
+    const items = order.OrderItem.map((item) => ({
+      name: item.name,
+      price: item.price,
+      quantity: item.quantity,
+    }));
+
+    console.log('2. Order', items[0]);
+
+    const paymentSession = await firstValueFrom(
+      this.client.send('create.payment.session', {
+        orderId: order.id,
+        currency: 'usd',
+        items: order.OrderItem.map((item) => ({
+          name: item.name,
+          price: item.price,
+          quantity: item.quantity,
+        })),
+      }),
+    );
+
+    return paymentSession;
   }
 }
